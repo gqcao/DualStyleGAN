@@ -9,14 +9,15 @@ from torch.nn import functional as F
 import torchvision
 from model.dualstylegan import DualStyleGAN
 from model.encoder.psp import pSp
+import PIL.Image
 
 class TestOptions():
     def __init__(self):
 
         self.parser = argparse.ArgumentParser(description="Exemplar-Based Style Transfer")
-        self.parser.add_argument("--content", type=str, default='./data/content/081680.jpg', help="path of the content image")
+        self.parser.add_argument("--content", type=str, default='./data/content/guanqun_cao_rz.jpg', help="path of the content image")
         self.parser.add_argument("--style", type=str, default='cartoon', help="target style type")
-        self.parser.add_argument("--style_id", type=int, default=53, help="the id of the style image")
+        self.parser.add_argument("--style_img", type=str, default='./data/unseen/roman.jpg', help="path of the style image")
         self.parser.add_argument("--truncation", type=float, default=0.75, help="truncation for intrinsic style code (content)")
         self.parser.add_argument("--weight", type=float, nargs=18, default=[0.75]*7+[1]*11, help="weight of the extrinsic style")
         self.parser.add_argument("--name", type=str, default='transfer', help="filename to save the generated images")
@@ -64,10 +65,20 @@ if __name__ == "__main__":
     args = parser.parse()
     print('*'*98)
     
+    transform = transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(256),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ]
+    )
+    """ 
     transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.5, 0.5, 0.5],std=[0.5,0.5,0.5]),
     ])
+    """ 
     
     generator = DualStyleGAN(1024, 512, 8, 2, res_index=6)
     generator.eval()
@@ -115,20 +126,23 @@ if __name__ == "__main__":
         img_rec = torch.clamp(img_rec.detach(), -1, 1)
         viz += [img_rec]
 
-        stylename = list(exstyles.keys())[args.style_id]
-        latent = torch.tensor(exstyles[stylename]).to(device)
-        if args.preserve_color and not args.wplus:
-            latent[:,7:18] = instyle[:,7:18]
+        # Create from an unseen style
+        #Simg = transform(load_image(args.style_img).to(device))
+        Simg = transform(PIL.Image.open(args.style_img).convert("RGB"))
+        Simgs = torch.stack([Simg], 0).to(device)
+        
         # extrinsic styte code
+        simg_rec, latent = encoder(Simgs, randomize_noise=False, return_latents=True, z_plus_latent=True)
+        """
+        simg_rec, latent = encoder(F.adaptive_avg_pool2d(Simg, 256), randomize_noise=False, return_latents=True, 
+                                   z_plus_latent=z_plus_latent, return_z_plus_latent=return_z_plus_latent, resize=False)  
+        """
         exstyle = generator.generator.style(latent.reshape(latent.shape[0]*latent.shape[1], latent.shape[2])).reshape(latent.shape)
         if args.preserve_color and args.wplus:
             exstyle[:,7:18] = instyle[:,7:18]
             
         # load style image if it exists
-        S = None
-        if os.path.exists(os.path.join(args.data_path, args.style, 'images/train', stylename)):
-            S = load_image(os.path.join(args.data_path, args.style, 'images/train', stylename)).to(device)
-            viz += [S]
+        #viz += [simg_rec]
 
         # style transfer 
         # input_is_latent: instyle is not in W space
@@ -142,7 +156,7 @@ if __name__ == "__main__":
 
     print('Generate images successfully!')
     
-    save_name = args.style + '_' + args.name+'_%d_%s'%(args.style_id, os.path.basename(args.content).split('.')[0])
+    save_name = args.style + '_' + args.name+'_usseen_%s'%(os.path.basename(args.content).split('.')[0])
     save_image(torchvision.utils.make_grid(F.adaptive_avg_pool2d(torch.cat(viz, dim=0), 256), 4, 2).cpu(), 
                os.path.join(args.output_path, save_name+'_overview.jpg'))
     save_image(img_gen[0].cpu(), os.path.join(args.output_path, save_name+'.jpg'))
